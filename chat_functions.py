@@ -5,8 +5,8 @@ import selectors
 from typing import types
 from aioconsole import aprint
 import os
-
-from client import start_connection
+import random
+import string
 
 sel = selectors.DefaultSelector()
 PORT_NUMBER = 5000
@@ -14,6 +14,93 @@ GLOBAL_CONNECTIONS = {}
 
 LINE_SEP = '-----------------------------------'
 
+#------ Server functions --------------
+def accept_wrapper(sock: socket.socket) -> None:
+    '''
+    wrapper function to accept a socket connection 
+    and register with the default selector
+    '''
+    conn, addr = sock.accept()  # Should be ready to read
+    print("accepted connection from", addr)
+    GLOBAL_CONNECTIONS[str(len(GLOBAL_CONNECTIONS))] = (*addr, sock)
+    conn.setblocking(False)
+    data = types.SimpleNamespace(addr=addr, inb=b"", outb=b"")
+    events = selectors.EVENT_READ | selectors.EVENT_WRITE
+    sel.register(conn, events, data=data)
+
+def service_connection(key, mask):
+    '''
+    service connection function, this is the server event loop
+    '''
+    sock = key.fileobj
+    data = key.data
+    if mask & selectors.EVENT_READ:
+        recv_data = sock.recv(1024)  # Should be ready to read
+        if recv_data:
+            data.outb += recv_data
+    if mask & selectors.EVENT_WRITE:
+        if data.outb:
+            print("echoing", repr(data.outb), "to", data.addr)
+            sent = sock.send(data.outb)  # Should be ready to write
+            data.outb = data.outb[sent:]
+
+
+def run_server():
+    '''
+    function to run the server event loop for the chat application.
+
+    Uses non-blocking sockets
+    '''
+    try:
+        lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_bind = (_myip(), PORT_NUMBER)
+        lsock.bind(server_bind)
+        lsock.listen()
+        print("listening on", server_bind)
+        lsock.setblocking(False)
+        sel.register(lsock, selectors.EVENT_READ, data=None)
+        try:
+            while True:
+                events = sel.select(timeout=None)
+                for key, mask in events:
+                    if key.data is None:
+                        accept_wrapper(key.fileobj)
+                    else:
+                        service_connection(key, mask)
+        except KeyboardInterrupt:
+            print("caught keyboard interrupt, exiting")
+        finally:
+            sel.close()
+    except:
+        print('Server already running, Running in Client only mode')
+
+# ----------- Client functions ------------
+def start_connection(destination: str, port_num: str) -> socket.socket:
+    '''
+    function to start a connection to a server.
+
+    returns the client tcp socket
+    '''
+    # create a tuple containing the host and port
+    server_address = (destination, int(port_num))
+
+    # create a random 16 letter string to use as a connection ID
+    connection_id = ''.join(random.choice(string.ascii_lowercase) for i in range(16))
+
+    # print that we are starting a connection to the server
+    print("starting connection", connection_id, "to", server_address)
+
+    # create a TCP socket (nonblocking)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setblocking(False)
+    sock.connect_ex(server_address) # like connect, but returns an error code rather than raising an exception when an error occurs
+
+    events = selectors.EVENT_READ | selectors.EVENT_WRITE
+    data = types.SimpleNamespace(addr=server_address, inb=b"", outb=b"")
+    sel.register(sock, events, data=data)
+    return sock
+
+# ------------- Chat functions -----------------------
 
 def _help(func_name: str = None) -> None:
     '''
@@ -78,11 +165,10 @@ def _connect(destination: str, port_num: str) -> None:
     '''
     try:
         sock = start_connection(destination, port_num)
-        GLOBAL_CONNECTIONS[(destination, port_num)] = sock
+        GLOBAL_CONNECTIONS[str(len(GLOBAL_CONNECTIONS))] = (destination, port_num, sock)
         print(f'Connected to Destination: {(destination, port_num)}')
     except:
         print(f'Error connecting to destination: {(destination, port_num)}')
-
 
 
 def _list():
@@ -94,12 +180,25 @@ def _list():
     '''
     res = 'id:\tIP address\tPort No.\n'
     for index, item in enumerate(GLOBAL_CONNECTIONS.items(), 0):
-        res += f'{index}\t{item[0][0]}\t{item[0][1]}\n'
+        res += f'{index}\t{item[1][0]}\t{item[1][1]}\n'
     return res
 
 
-def _terminate():
-    raise NotImplementedError
+def _terminate(index: str):
+    '''
+    Description:
+    This command will terminate the connection listed under the specified
+    number when LIST is used to display all connections. E.g., terminate 2. In this example, the connection
+    with 192.168.21.21 should end. An error message is displayed if a valid connection does not exist as
+    number 2. If a remote machine terminates one of your connections, you should also display a message. 
+    '''
+    try:
+        # need to send message to other end to close
+        GLOBAL_CONNECTIONS[index][2].close()
+        return f'Closed connection #{index}'
+    except:
+        return f'Error terminating connection #{index}'
+    
 
 
 def _send():
@@ -111,8 +210,10 @@ def _exit():
     Exits the program
     '''
     for item in GLOBAL_CONNECTIONS.items():
-        item[1].close()
+        item[1][2].close()
     os._exit(1)
+
+
 
 #set a commands dictionary, this will store our possible commands and functions for said command
 COMMANDS_DICT = {

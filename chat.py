@@ -1,6 +1,5 @@
 
-from chat_functions import _help, _myip, _myport, _connect, _terminate, _list, _send, _exit, COMMANDS_DICT
-from server import run_server
+from chat_functions import _help, _myip, _myport, _connect, _terminate, _list, _send, _exit, COMMANDS_DICT, run_server
 
 import asyncio
 from functools import partial
