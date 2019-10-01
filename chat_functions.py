@@ -54,6 +54,7 @@ def run_server():
     '''
     try:
         lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_bind = (_myip(), PORT_NUMBER)
         lsock.bind(server_bind)
         lsock.listen()
