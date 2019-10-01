@@ -18,7 +18,7 @@ async def main():
             if result:
                 await aprint(result)
         else:
-            await aprint(f'False {command_call} {command_args}')
+            await aprint(f'Command: {command_call} {command_args} does not exist.')
 
 
 

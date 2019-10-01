@@ -23,7 +23,7 @@ def accept_wrapper(sock: socket.socket) -> None:
     '''
     conn, addr = sock.accept()  # Should be ready to read
     print("accepted connection from", addr)
-    GLOBAL_CONNECTIONS[str(len(GLOBAL_CONNECTIONS))] = (*addr, sock)
+    GLOBAL_CONNECTIONS[str(len(GLOBAL_CONNECTIONS))] = (*addr, sock, 'server')
     conn.setblocking(False)
     data = types.SimpleNamespace(addr=addr, inb=b"", outb=b"")
     events = selectors.EVENT_READ | selectors.EVENT_WRITE
@@ -166,12 +166,12 @@ def _connect(destination: str, port_num: str) -> None:
     failure in connections between two peers should be indicated by both the peers using suitable messages.
     Self-connections and duplicate connections should be flagged with suitable error messages
     '''
-    try:
-        sock = start_connection(destination, port_num)
-        GLOBAL_CONNECTIONS[str(len(GLOBAL_CONNECTIONS))] = (destination, port_num, sock)
-        print(f'Connected to Destination: {(destination, port_num)}')
-    except:
-        print(f'Error connecting to destination: {(destination, port_num)}')
+    # try:
+    sock = start_connection(destination, port_num)
+    GLOBAL_CONNECTIONS[str(len(GLOBAL_CONNECTIONS))] = (destination, port_num, sock, 'client')
+    print(f'Connected to Destination: {(destination, port_num)}')
+    # except:
+    #     print(f'Error connecting to destination: {(destination, port_num)}')
 
 
 def _list():
@@ -197,8 +197,11 @@ def _terminate(index: str):
     '''
     try:
         # need to send message to other end to close
-        GLOBAL_CONNECTIONS[index][2].close()
-        return f'Closed connection #{index}'
+        deleted_item = GLOBAL_CONNECTIONS.pop(index, None)
+        if deleted_item[3] != 'server':
+            deleted_item[2].close()
+            sel.unregister(deleted_item[2])
+        return f'Closed connection {deleted_item[:2]}'
     except:
         return f'Error terminating connection #{index}'
     
