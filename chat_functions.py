@@ -15,6 +15,7 @@ GLOBAL_CONNECTIONS = {}
 LINE_SEP = '-----------------------------------'
 
 #------ Server functions --------------
+
 def accept_wrapper(sock: socket.socket) -> None:
     '''
     wrapper function to accept a socket connection 
@@ -75,6 +76,7 @@ def run_server():
         print('Server already running, Running in Client only mode')
 
 # ----------- Client functions ------------
+
 def start_connection(destination: str, port_num: str) -> socket.socket:
     '''
     function to start a connection to a server.
