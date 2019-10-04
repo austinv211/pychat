@@ -1,18 +1,17 @@
 from typing import Callable
-
 import socket
 import selectors
 from typing import types
 from aioconsole import aprint
 import os
-import random
-import string
 
-sel = selectors.DefaultSelector()
-PORT_NUMBER = 5000
-GLOBAL_CONNECTIONS = {}
+# ----- GLOBAL CONSTANTS ----------
+DEFAULT_SELECTOR = selectors.DefaultSelector() # the default selector to use for IO from sockets
+PORT_NUMBER = 5000 # the port number to run the server on, need to change this to accept port number from command line
+GLOBAL_CONNECTIONS = {} # a global dictionary to store our connections
+LINE_SEP = '-----------------------------------' # Line separator constat
+EVENTS = selectors.EVENT_READ | selectors.EVENT_WRITE # the events to check for in our selector
 
-LINE_SEP = '-----------------------------------'
 
 #------ Server functions --------------
 
@@ -23,11 +22,11 @@ def accept_wrapper(sock: socket.socket) -> None:
     '''
     conn, addr = sock.accept()  # Should be ready to read
     print("accepted connection from", addr)
-    GLOBAL_CONNECTIONS[str(len(GLOBAL_CONNECTIONS))] = (*addr, sock, 'server')
+    conn_id = str(len(GLOBAL_CONNECTIONS))
+    GLOBAL_CONNECTIONS[conn_id] = (*addr, sock, 'server')
     conn.setblocking(False)
-    data = types.SimpleNamespace(addr=addr, inb=b"", outb=b"")
-    events = selectors.EVENT_READ | selectors.EVENT_WRITE
-    sel.register(conn, events, data=data)
+    data = types.SimpleNamespace(connid=conn_id, addr=addr, messages=[], inb=b"", outb=b"")
+    DEFAULT_SELECTOR.register(conn, EVENTS, data=data)
 
 def service_connection(key, mask):
     '''
@@ -38,10 +37,12 @@ def service_connection(key, mask):
     if mask & selectors.EVENT_READ:
         recv_data = sock.recv(1024)  # Should be ready to read
         if recv_data:
-            data.outb += recv_data
+            print(f'\nMessage Received from { data.addr[0] }\nSender\'s Port: { data.addr[1] }\nMessage: \"{ recv_data.decode() }\"\n')
     if mask & selectors.EVENT_WRITE:
+        if not data.outb and data.messages:
+            data.outb = data.messages.pop(0)
         if data.outb:
-            print("echoing", repr(data.outb), "to", data.addr)
+            print(f'\nMessage \"{ data.outb.decode() }\" Sent to Connection ID: { data.connid }\n')
             sent = sock.send(data.outb)  # Should be ready to write
             data.outb = data.outb[sent:]
 
@@ -60,25 +61,13 @@ def run_server():
         lsock.listen()
         print("listening on", server_bind)
         lsock.setblocking(False)
-        sel.register(lsock, selectors.EVENT_READ, data=None)
-        try:
-            while True:
-                events = sel.select(timeout=None)
-                for key, mask in events:
-                    if key.data is None:
-                        accept_wrapper(key.fileobj)
-                    else:
-                        service_connection(key, mask)
-        except KeyboardInterrupt:
-            print("caught keyboard interrupt, exiting")
-        finally:
-            sel.close()
+        DEFAULT_SELECTOR.register(lsock, selectors.EVENT_READ, data=None)
     except:
         print('Server already running, Running in Client only mode')
 
 # ----------- Client functions ------------
 
-def start_connection(destination: str, port_num: str) -> socket.socket:
+def start_connection(destination: str, port_num: str, conn_id: str) -> socket.socket:
     '''
     function to start a connection to a server.
 
@@ -87,21 +76,34 @@ def start_connection(destination: str, port_num: str) -> socket.socket:
     # create a tuple containing the host and port
     server_address = (destination, int(port_num))
 
-    # create a random 16 letter string to use as a connection ID
-    connection_id = ''.join(random.choice(string.ascii_lowercase) for i in range(16))
-
     # print that we are starting a connection to the server
-    print("starting connection", connection_id, "to", server_address)
+    print(f'starting connection to: {server_address}')
 
     # create a TCP socket (nonblocking)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setblocking(False)
     sock.connect_ex(server_address) # like connect, but returns an error code rather than raising an exception when an error occurs
 
-    events = selectors.EVENT_READ | selectors.EVENT_WRITE
-    data = types.SimpleNamespace(addr=server_address, inb=b"", outb=b"")
-    sel.register(sock, events, data=data)
+    data = types.SimpleNamespace(connid=conn_id, addr=server_address, messages=[], inb=b"", outb=b"")
+    DEFAULT_SELECTOR.register(sock, EVENTS, data=data)
     return sock
+
+# ------------- General Event Loop -------------------
+
+def general_loop():
+    run_server()
+    try:
+        while True:
+            events_to_check = DEFAULT_SELECTOR.select(timeout=None)
+            for key, mask in events_to_check:
+                if key.data is None:
+                    accept_wrapper(key.fileobj)
+                else:
+                    service_connection(key, mask)
+    except KeyboardInterrupt:
+        print("caught keyboard interrupt, exiting")
+    finally:
+        DEFAULT_SELECTOR.close()
 
 # ------------- Chat functions -----------------------
 
@@ -167,8 +169,9 @@ def _connect(destination: str, port_num: str) -> None:
     Self-connections and duplicate connections should be flagged with suitable error messages
     '''
     # try:
-    sock = start_connection(destination, port_num)
-    GLOBAL_CONNECTIONS[str(len(GLOBAL_CONNECTIONS))] = (destination, port_num, sock, 'client')
+    conn_id = str(len(GLOBAL_CONNECTIONS))
+    sock = start_connection(destination, port_num, conn_id)
+    GLOBAL_CONNECTIONS[conn_id] = (destination, port_num, sock, 'client')
     print(f'Connected to Destination: {(destination, port_num)}')
     # except:
     #     print(f'Error connecting to destination: {(destination, port_num)}')
@@ -200,15 +203,27 @@ def _terminate(index: str):
         deleted_item = GLOBAL_CONNECTIONS.pop(index, None)
         if deleted_item[3] != 'server':
             deleted_item[2].close()
-            sel.unregister(deleted_item[2])
+            DEFAULT_SELECTOR.unregister(deleted_item[2])
         return f'Closed connection {deleted_item[:2]}'
     except:
         return f'Error terminating connection #{index}'
     
 
 
-def _send():
-    raise NotImplementedError
+def _send(connection_id: str, *argv):
+    '''
+    DESCRIPTION:
+    send <connection id.> <message> (For example, send 3 Oh! This project is a piece of cake). This will
+    send the message to the host on the connection that is designated by the number 3 when command “list” is
+    used. The message to be sent can be up-to 100 characters long, including blank spaces. On successfully
+    executing the command, the sender should display “Message sent to <connection id>” on the screen. On
+    receiving any message from the peer, the receiver should display the received message along with the
+    sender information.
+    '''
+    # get the socket at the connection id
+    destination, _, sock, _ = GLOBAL_CONNECTIONS.get(connection_id)
+    message_to_send = ' '.join([arg for arg in argv])
+    DEFAULT_SELECTOR.modify(sock, events=EVENTS, data=types.SimpleNamespace(connid=connection_id, addr=destination, messages=[message_to_send.encode()], inb=b"", outb=b""))
 
 
 def _exit():
