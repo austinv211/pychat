@@ -1,10 +1,12 @@
 
-from chat_functions import _help, _myip, _myport, _connect, _terminate, _list, _send, _exit, COMMANDS_DICT, run_server, general_loop
+from chat_functions import _help, _myip, _myport, _connect, _terminate, _list, _send, _exit, \
+    COMMANDS_DICT, run_server, general_loop, set_port_number
 
 import asyncio
 from functools import partial
 from aioconsole import ainput, aprint
 import threading
+import sys
 
 
 async def main():
@@ -28,6 +30,13 @@ async def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        try:
+            new_port_num = int(sys.argv[1])
+            if new_port_num > 1023 and new_port_num <= 65535:
+                set_port_number(new_port_num)
+        except:
+            print('Error assigning port number from command line input.')
     event_thread = threading.Thread(name='general_loop', target=general_loop)
     event_thread.start()
     asyncio.run(main())

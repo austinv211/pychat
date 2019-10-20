@@ -4,16 +4,21 @@ import selectors
 from typing import types
 from aioconsole import aprint
 import os
+import time
 
 # ----- GLOBAL CONSTANTS ----------
 DEFAULT_SELECTOR = selectors.DefaultSelector() # the default selector to use for IO from sockets
-PORT_NUMBER = 5000 # the port number to run the server on, need to change this to accept port number from command line
+PORT_NUMBER = 5000 # the port number to run the server on, this will be the default if no port number gets set at start
 GLOBAL_CONNECTIONS = {} # a global dictionary to store our connections
 LINE_SEP = '-----------------------------------' # Line separator constat
 EVENTS = selectors.EVENT_READ | selectors.EVENT_WRITE # the events to check for in our selector
 
 
 #------ Server functions --------------
+
+def set_port_number(port_num: int) -> None:
+    global PORT_NUMBER
+    PORT_NUMBER = port_num
 
 def accept_wrapper(sock: socket.socket) -> None:
     '''
@@ -23,7 +28,7 @@ def accept_wrapper(sock: socket.socket) -> None:
     conn, addr = sock.accept()  # Should be ready to read
     print("accepted connection from", addr)
     conn_id = str(len(GLOBAL_CONNECTIONS))
-    GLOBAL_CONNECTIONS[conn_id] = (*addr, sock, 'server')
+    GLOBAL_CONNECTIONS[conn_id] = (addr[0], addr[1], conn, 'server')
     conn.setblocking(False)
     data = types.SimpleNamespace(connid=conn_id, addr=addr, messages=[], inb=b"", outb=b"")
     DEFAULT_SELECTOR.register(conn, EVENTS, data=data)
@@ -37,12 +42,23 @@ def service_connection(key, mask):
     if mask & selectors.EVENT_READ:
         recv_data = sock.recv(1024)  # Should be ready to read
         if recv_data:
-            print(f'\nMessage Received from { data.addr[0] }\nSender\'s Port: { data.addr[1] }\nMessage: \"{ recv_data.decode() }\"\n')
+            if recv_data.decode() != '_x01_exit':
+                print(f'\nMessage Received from { data.addr[0] }\nSender\'s Port: { data.addr[1] }\nMessage: \"{ recv_data.decode() }\"\n')
+            else:
+                found_key = None
+                for key, value in GLOBAL_CONNECTIONS.items():
+                    if value[0] == data.addr[0] and value[1] == data.addr[1]:
+                        found_key = key
+                        break
+                if found_key:
+                    _terminate(found_key, received_exit=True)
+                
     if mask & selectors.EVENT_WRITE:
         if not data.outb and data.messages:
             data.outb = data.messages.pop(0)
         if data.outb:
-            print(f'\nMessage \"{ data.outb.decode() }\" Sent to Connection ID: { data.connid }\n')
+            if data.outb.decode() != '_x01_exit':
+                print(f'\nMessage \"{ data.outb.decode() }\" Sent to Connection ID: { data.connid }\n')
             sent = sock.send(data.outb)  # Should be ready to write
             data.outb = data.outb[sent:]
 
@@ -109,6 +125,8 @@ def general_loop():
 
 def _help(func_name: str = None) -> None:
     '''
+    Command Name:
+    help
     Description:
     Display information about the available user interface options or command manual.
 
@@ -130,6 +148,8 @@ def _help(func_name: str = None) -> None:
 
 def _myip() -> None:
     '''
+    Command Name:
+    myip
     Description:
     Display the IP address of this process.
     Note: The IP should not be your “Local” address (127.0.0.1). It should be the actual IP of the computer.
@@ -141,12 +161,19 @@ def _myip() -> None:
     192.168.1.8
     '''
     try:
-        return socket.gethostbyname(socket.gethostname())
+        address_list = socket.gethostbyname_ex(socket.gethostname())[2]
+        for address in address_list:
+            if address != '127.0.0.1':
+                return address
+        print('Could not get IP address. Exiting ...')
+        _exit()
     except:
         print('Error Getting IP.')
 
 def _myport() -> None:
     '''
+    Command Name:
+    myport
     Description:
     Display the port on which this process is listening for incoming connections.
 
@@ -161,6 +188,8 @@ def _myport() -> None:
 
 def _connect(destination: str, port_num: str) -> None:
     '''
+    Command Name:
+    connect
     Description:
     This command establishes a new TCP connection to the specified
     <destination> at the specified < port no>. The <destination> is the IP address of the computer. Any attempt
@@ -168,17 +197,19 @@ def _connect(destination: str, port_num: str) -> None:
     failure in connections between two peers should be indicated by both the peers using suitable messages.
     Self-connections and duplicate connections should be flagged with suitable error messages
     '''
-    # try:
-    conn_id = str(len(GLOBAL_CONNECTIONS))
-    sock = start_connection(destination, port_num, conn_id)
-    GLOBAL_CONNECTIONS[conn_id] = (destination, port_num, sock, 'client')
-    print(f'Connected to Destination: {(destination, port_num)}')
-    # except:
-    #     print(f'Error connecting to destination: {(destination, port_num)}')
+    try:
+        conn_id = str(len(GLOBAL_CONNECTIONS))
+        sock = start_connection(destination, port_num, conn_id)
+        GLOBAL_CONNECTIONS[conn_id] = (destination, port_num, sock, 'client')
+        print(f'Connected to Destination: {(destination, port_num)}')
+    except:
+        print(f'Error connecting to destination: {(destination, port_num)}')
 
 
 def _list():
     '''
+    Command Name:
+    list
     Description:
     Display a numbered list of all the connections this process is part of. This numbered list will include
     connections initiated by this process and connections initiated by other processes. The output should
@@ -190,8 +221,10 @@ def _list():
     return res
 
 
-def _terminate(index: str):
+def _terminate(index: str, received_exit=False):
     '''
+    Command Name:
+    terminate
     Description:
     This command will terminate the connection listed under the specified
     number when LIST is used to display all connections. E.g., terminate 2. In this example, the connection
@@ -199,7 +232,11 @@ def _terminate(index: str):
     number 2. If a remote machine terminates one of your connections, you should also display a message. 
     '''
     try:
-        # need to send message to other end to close
+        if not received_exit:
+            _send(index, '_x01_exit')
+            time.sleep(3)
+        else:
+            print(f'Terminating Connection {index} due to peer disconnect.')
         deleted_item = GLOBAL_CONNECTIONS.pop(index, None)
         if deleted_item[3] != 'server':
             deleted_item[2].close()
@@ -212,7 +249,9 @@ def _terminate(index: str):
 
 def _send(connection_id: str, *argv):
     '''
-    DESCRIPTION:
+    Command Name:
+    send
+    Description:
     send <connection id.> <message> (For example, send 3 Oh! This project is a piece of cake). This will
     send the message to the host on the connection that is designated by the number 3 when command “list” is
     used. The message to be sent can be up-to 100 characters long, including blank spaces. On successfully
@@ -221,9 +260,9 @@ def _send(connection_id: str, *argv):
     sender information.
     '''
     # get the socket at the connection id
-    destination, _, sock, _ = GLOBAL_CONNECTIONS.get(connection_id)
+    destination, port_num, sock, _ = GLOBAL_CONNECTIONS.get(connection_id)
     message_to_send = ' '.join([arg for arg in argv])
-    DEFAULT_SELECTOR.modify(sock, events=EVENTS, data=types.SimpleNamespace(connid=connection_id, addr=destination, messages=[message_to_send.encode()], inb=b"", outb=b""))
+    DEFAULT_SELECTOR.modify(sock, events=EVENTS, data=types.SimpleNamespace(connid=connection_id, addr=(destination, port_num), messages=[message_to_send.encode()], inb=b"", outb=b""))
 
 
 def _exit():
