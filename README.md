@@ -18,8 +18,9 @@ Launch terminal and navigate to the PYCHAT directory.
 Run the following command:
 
 ```bash
-python3 chat.py
+python3 chat.py 4000
 ```
+- 4000 is the port number, feel free to choose another valid port number
 
 ## FUNCTIONS:
 
